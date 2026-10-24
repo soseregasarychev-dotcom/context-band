@@ -27,9 +27,31 @@ const VOICES: [string, Voice][] = [
 ]
 const voiceLabel = (v: Voice) => VOICES.find(([, id]) => id === v)?.[0] ?? v
 
+// Скиллы из пакета JuliusBrussee/caveman. Установщик делает на них ссылки в ~/.claude/skills,
+// и Claude включал бы их сам. Мод их глушит: скилл из этого списка, который лежит
+// в ~/.agents/skills, не открывается и не виден в меню команд. Режим — только кнопкой.
+const CAVE_SKILLS = new Set([
+  'cavecrew', 'caveman', 'caveman-commit', 'caveman-compress', 'caveman-discover',
+  'caveman-evidence-review', 'caveman-explore', 'caveman-help', 'caveman-learn', 'caveman-manage',
+  'caveman-optimize', 'caveman-review', 'caveman-setup', 'caveman-stats', 'investigate-first',
+  'lean-build', 'megacave', 'migration', 'safe-refactor', 'surgical-patch', 'ultracave', 'verify-and-stop',
+])
+
+async function homeDir($: EngineInterface) {
+  return (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
+}
+
+/** Скилл из пакета caveman (а не чужой с тем же именем): есть в списке и лежит в ~/.agents/skills. */
+async function isCaveSkill($: EngineInterface, name: string) {
+  const bare = name.split(':').pop() ?? name
+  if (!CAVE_SKILLS.has(bare)) return false
+  const home = await homeDir($)
+  return home ? $.fs.exists(`${home}/.agents/skills/${bare}/SKILL.md`) : false
+}
+
 /** Текст скилла без шапки --- … ---; null — файла нет. */
 async function voiceText($: EngineInterface, v: Voice): Promise<string | null> {
-  const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
+  const home = await homeDir($)
   if (!home) return null
   try {
     const raw = await $.fs.read(`${home}/.agents/skills/${v}/SKILL.md`)
@@ -95,6 +117,24 @@ export const register: Register = on => {
       'Фразы «stop caveman» / «normal mode» и команды /caveman здесь не работают — если владелец просит выключить, ' +
       'подскажи нажать «Режим → Обычный». Отвечай на русском, как и раньше.\n\n'
     return { sections: [...done.sections, { id: 'context-band:voice', text: note + text, scope: 'session' as const }] }
+  })
+
+  // Скилл caveman, вызванный как скилл (/caveman, инструмент Skill, предзагрузка), не открывается:
+  // вместо его текста модель читает, что режим включается кнопкой.
+  on('skill.prompt', async ($, e, next) => {
+    if (!(await isCaveSkill($, e.skill))) return next(e)
+    return {
+      text:
+        `Скилл «${e.skill}» отключён модом context-band и не применяется. ` +
+        'Режим caveman включается только кнопкой «Режим → Caveman» в полосе над полем ввода. ' +
+        'Продолжай отвечать как обычно; если владелец просил этот режим, подскажи нажать кнопку.',
+    }
+  })
+
+  // И не виден в меню команд (набранный целиком всё равно упрётся в skill.prompt выше).
+  on('command.describe', async ($, e, next) => {
+    const done = await next(e)
+    return (await isCaveSkill($, e.command)) ? { ...done, isHidden: true } : done
   })
 
   on('turn.complete', async ($, e, next) => {
