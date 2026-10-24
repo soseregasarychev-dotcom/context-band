@@ -1,0 +1,5 @@
+{
+  "name": "context-band",
+  "owner": { "name": "soseregasarychev-dotcom" },
+  "plugins": [{ "name": "context-band", "source": "./" }]
+}
